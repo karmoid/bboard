@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,11 +13,18 @@ import (
 // context : Store specific value to alter the program behaviour
 // Like an Args container
 type (
+	fichier struct {
+		path      string
+		filecount int
+	}
+
 	context struct {
 		src           *string
 		verbose       *bool
 		filecount     uint64
 		fileprocessed uint64
+		allfilesout   []os.FileInfo
+		dirfilesout   []fichier
 		starttime     time.Time
 		endtime       time.Time
 	}
@@ -27,24 +33,62 @@ type (
 // contexte : Hold runtime value (from commande line args)
 var contexte context
 
+func (f fichier) Name() string {
+	return f.path
+}
+
+func (f fichier) Count() int {
+	return f.filecount
+}
+
+// Check if path contains Wildcard characters
+func isWildcard(value string) bool {
+	return strings.Contains(value, "*") || strings.Contains(value, "?")
+}
+
 // Get the files' list to copy
-func getFiles(ctx *context) (filesOut []os.FileInfo, errOut error) {
-	pattern := filepath.Base(*ctx.src)
-	files, err := ioutil.ReadDir(filepath.Dir(*ctx.src))
+func getFiles(ctx *context, src string) error {
+	pattern := filepath.Base(src)
+	files, err := ioutil.ReadDir(filepath.Dir(src))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	for _, file := range files {
 		if res, err := filepath.Match(strings.ToLower(pattern), strings.ToLower(file.Name())); res {
 			if err != nil {
-				errOut = err
-				return
+				return err
 			}
-			filesOut = append(filesOut, file)
+			ctx.allfilesout = append(ctx.allfilesout, file)
 			// fmt.Printf("prise en compte de %s", file.Name())
 		}
 	}
-	return filesOut, nil
+	return nil
+}
+
+// Get the files' list to copy
+func getFilesInPath(ctx *context, base string, lookfor string) error {
+	// fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
+	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
+			return err
+		}
+		if info.IsDir() && info.Name() == lookfor {
+			// fmt.Printf("finding a dir with %s: %s - %+v \n", lookfor, path, info.Name())
+			files, err := ioutil.ReadDir(filepath.Dir(path + "\\" + info.Name()))
+			if err != nil {
+				return err
+			}
+			ctx.dirfilesout = append(ctx.dirfilesout, fichier{path: path, filecount: len(files)})
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		fmt.Printf("error walking the path %q: %v\n", base, err)
+	}
+	return nil
 }
 
 // Prepare Command Line Args parsing
@@ -67,13 +111,16 @@ func processArgs(ctx *context) (err error) {
 			return fmt.Errorf("missing required -%s argument/flag", req)
 		}
 	}
+	ctx.allfilesout = make([]os.FileInfo, 0, 300)
+	ctx.dirfilesout = make([]fichier, 0, 100)
+
 	return nil
 }
 
 // No more Wildcard and selection in this Array
 // fixedCopy because the Src array is predefined
-func fixedCount(ctx *context, files []os.FileInfo) error {
-	ctx.filecount = uint64(len(files))
+func fixedCount(ctx *context) {
+	ctx.filecount = uint64(len(ctx.allfilesout))
 	if *ctx.verbose {
 		fmt.Printf("Files: %d\n",
 			ctx.filecount)
@@ -81,23 +128,66 @@ func fixedCount(ctx *context, files []os.FileInfo) error {
 		fmt.Printf("**START** (%v)\n", ctx.starttime)
 		defer func() { ctx.endtime = time.Now() }()
 	}
-	for _, file := range files {
+	for _, file := range ctx.allfilesout {
 		fmt.Printf("File processed : %s\n", file.Name())
 		ctx.fileprocessed++
 	}
-	return nil
+	for _, file := range ctx.dirfilesout {
+		fmt.Printf("Directory processed : %s - %d files\n", file.Name(), file.Count())
+		ctx.fileprocessed++
+	}
+	return
 }
 
 // Check if src is a wildcard expression
 // if True, we must have a Path in dst
 // Else dst could be Path or File
-func genericCount(ctx *context) (myerr error) {
-	// var files []os.FileInfo
-	files, err := getFiles(ctx)
-	if err != nil {
-		return err
+func genericCount(ctx *context) bool {
+	var haserror bool
+	specs := strings.Split(*ctx.src, ";")
+	for i := 0; i < len(specs); i++ {
+		// fmt.Printf("[%d/%d] %s\n", i+1, len(specs), specs[i])
+		if isWildcard(specs[i]) {
+			// fmt.Print("common process on Wildcard\n")
+			if err := getFiles(ctx, specs[i]); err != nil {
+				haserror = true
+				fmt.Errorf("Process error:", err)
+			}
+		} else if strings.HasSuffix(specs[i], "\\") {
+			// fmt.Print("specific process on Directory\n")
+			paths := strings.Split(specs[i], "\\")
+			// for j := 0; j < len(paths); j++ {
+			// 	fmt.Printf("%d - path: %s\n", j, paths[j])
+			// }
+			if len(paths) > 1 {
+				base := paths[0] + "\\"
+				startat := len(paths) - 1
+				lookfor := paths[startat-1]
+				if startat > 1 {
+					startat--
+				}
+				for j := 1; j < startat; j++ {
+					base = base + paths[j] + "\\"
+				}
+				if err := getFilesInPath(ctx, base, lookfor); err != nil {
+					haserror = true
+					fmt.Errorf("Process error: Not enough args [%s]", specs[i])
+				}
+			} else {
+				haserror = true
+				fmt.Errorf("Process error")
+			}
+
+		} else {
+			fmt.Print("faultback process on Wildcard\n")
+			if err := getFiles(ctx, specs[i]); err != nil {
+				haserror = true
+				fmt.Errorf("Process error:", err)
+			}
+		}
 	}
-	err = fixedCount(ctx, files)
+
+	fixedCount(ctx)
 	if *ctx.verbose {
 		elapsedtime := ctx.endtime.Sub(ctx.starttime)
 		seconds := int64(elapsedtime.Seconds())
@@ -110,7 +200,7 @@ func genericCount(ctx *context) (myerr error) {
 			ctx.fileprocessed,
 			ctx.filecount)
 	}
-	return err
+	return haserror
 }
 
 // VersionNum : Litteral version
@@ -123,12 +213,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	err := genericCount(&contexte)
-	if err != nil {
-		fmt.Println("\nError:", err) // handle error
+	if !genericCount(&contexte) {
+		fmt.Println("\nWITH PROCESS ERROR\n") // handle error
 		os.Exit(1)
 	}
 
-	fmt.Println("\n Files:", err) // handle error
 	os.Exit(0)
 }

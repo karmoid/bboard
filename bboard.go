@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -13,33 +14,57 @@ import (
 // context : Store specific value to alter the program behaviour
 // Like an Args container
 type (
-	fichier struct {
-		path      string
-		filecount int
+	// fichier struct {
+	// 	path      string
+	// 	filecount int
+	// }
+
+	HistoryAPI struct {
+		Count int `json:"Count"`
+	}
+
+	DirectoryAPI struct {
+		Path      string       `json:"Path"`
+		Count     int          `json:"Count"`
+		Histories []HistoryAPI `json:"Histories"`
+	}
+
+	DirectoriesAPI struct {
+		Src         string         `json:"Src"`
+		Directories []DirectoryAPI `json:"Directories"`
+	}
+
+	History struct {
+		Count int
+	}
+
+	Directory struct {
+		Path      string
+		Count     int
+		Histories []History
+	}
+
+	Directories struct {
+		Src         string
+		Directories []Directory
 	}
 
 	context struct {
 		src           *string
 		verbose       *bool
+		quick         *string
 		filecount     uint64
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
-		dirfilesout   []fichier
+		dirfilesout   Directories
 		starttime     time.Time
 		endtime       time.Time
+		processlist   bool
 	}
 )
 
 // contexte : Hold runtime value (from commande line args)
 var contexte context
-
-func (f fichier) Name() string {
-	return f.path
-}
-
-func (f fichier) Count() int {
-	return f.filecount
-}
 
 // Check if path contains Wildcard characters
 func isWildcard(value string) bool {
@@ -79,7 +104,7 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 			if err != nil {
 				return err
 			}
-			ctx.dirfilesout = append(ctx.dirfilesout, fichier{path: path, filecount: len(files)})
+			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path, Count: len(files), Histories: make([]History, 0)})
 		}
 
 		return nil
@@ -95,6 +120,7 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 func setFlagList(ctx *context) {
 	ctx.src = flag.String("src", "", "Source file specification")
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
+	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
 	flag.Parse()
 }
 
@@ -112,7 +138,7 @@ func processArgs(ctx *context) (err error) {
 		}
 	}
 	ctx.allfilesout = make([]os.FileInfo, 0, 300)
-	ctx.dirfilesout = make([]fichier, 0, 100)
+	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: make([]Directory, 0, 100)}
 
 	return nil
 }
@@ -132,8 +158,8 @@ func fixedCount(ctx *context) {
 		fmt.Printf("File processed : %s\n", file.Name())
 		ctx.fileprocessed++
 	}
-	for _, file := range ctx.dirfilesout {
-		fmt.Printf("Directory processed : %s - %d files\n", file.Name(), file.Count())
+	for _, file := range ctx.dirfilesout.Directories {
+		fmt.Printf("Directory processed : %s - %d files\n", file.Path, file.Count)
 		ctx.fileprocessed++
 	}
 	return
@@ -142,6 +168,32 @@ func fixedCount(ctx *context) {
 // Check if src is a wildcard expression
 // if True, we must have a Path in dst
 // Else dst could be Path or File
+func listCount(ctx *context) bool {
+	var haserror bool
+	for i, dir := range ctx.dirfilesout.Directories {
+		// fmt.Printf("Quick list %d:%s\n", i, dir.Path)
+		files, err := ioutil.ReadDir(filepath.Dir(dir.Path))
+		haserror = err != nil
+		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, History{Count: dir.Count})
+		ctx.dirfilesout.Directories[i].Count = len(files)
+	}
+
+	fixedCount(ctx)
+	if *ctx.verbose {
+		elapsedtime := ctx.endtime.Sub(ctx.starttime)
+		seconds := int64(elapsedtime.Seconds())
+		if seconds == 0 {
+			seconds = 1
+		}
+		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files: %d processed on %d\n",
+			ctx.endtime,
+			elapsedtime,
+			ctx.fileprocessed,
+			ctx.filecount)
+	}
+	return haserror
+}
+
 func genericCount(ctx *context) bool {
 	var haserror bool
 	specs := strings.Split(*ctx.src, ";")
@@ -203,6 +255,35 @@ func genericCount(ctx *context) bool {
 	return haserror
 }
 
+func getConfig(ctx *context) bool {
+	file, err := os.Open(*ctx.quick)
+	if err != nil {
+		// fmt.Println("error:", err)
+		// configSt, _ := json.Marshal(&ctx.dirfilesout)
+		// fmt.Println("config:", configSt)
+		// ioutil.WriteFile(*ctx.quick, configSt, 0644)
+		return false
+	}
+	defer file.Close()
+	// fmt.Println("Nous allons décoder", file)
+	decoder := json.NewDecoder(file)
+	Dir := Directories{}
+	err = decoder.Decode(&Dir)
+	if err != nil {
+		fmt.Println("error:", err)
+		return false
+	}
+	if Dir.Src != *ctx.src {
+		fmt.Println("***Start from empty file. Different Src args***")
+		return false
+	}
+	for _, onedir := range Dir.Directories {
+		ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, onedir)
+		// fmt.Printf("Just added %d: %s-%d\n", i, onedir.Path, onedir.Count)
+	}
+	return true
+}
+
 // VersionNum : Litteral version
 const VersionNum = "1.0"
 
@@ -213,9 +294,50 @@ func main() {
 		os.Exit(2)
 	}
 
-	if !genericCount(&contexte) {
-		fmt.Println("\nWITH PROCESS ERROR\n") // handle error
-		os.Exit(1)
+	if *contexte.quick != "" {
+		contexte.processlist = getConfig(&contexte)
+	}
+	if contexte.processlist {
+		if !listCount(&contexte) {
+			fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			// os.Exit(1)
+		}
+
+	} else {
+		if !genericCount(&contexte) {
+			fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			// os.Exit(1)
+		}
+	}
+
+	// var jsonBlob = []byte(`
+	//       {"Src":"c:\\tools\\packages\\",
+	// 				"Directories":[
+	// 				{"Path":"c:\\tools\\toto\\packages\\1", "Count":12, "History":[13,24,34,56]},
+	// 				{"Path":"c:\\tools\\toto\\packages\\2", "Count":21, "History":[31,12,4,6]}
+	// 				]}
+	//   `)
+	//
+	// dirsAPI := DirectoriesAPI{}
+	// err := json.Unmarshal(jsonBlob, &dirsAPI)
+	// if err != nil {
+	// 	fmt.Errorf("opening config file : %v", err)
+	// }
+	// fmt.Printf("Unmarshalled : %v", dirsAPI)
+	// fmt.Printf("find json. SRC=%s\n", dirsAPI.Src)
+	// for i, direc := range dirsAPI.Directories {
+	// 	fmt.Printf("%d: Dir %s, %d files\n", i, direc.Path, direc.Count)
+	// 	for j, hist := range direc.History {
+	// 		fmt.Printf("History %d: %d\n", j, hist)
+	// 	}
+	// }
+	if *contexte.quick != "" {
+		dirs := Directories(contexte.dirfilesout)
+		// fmt.Printf("find json. SRC=%s\n", dirs.Src)
+		dirsJson, _ := json.Marshal(dirs)
+		fmt.Println("new json string: [", string(dirsJson), "]")
+		// fmt.Printf("%+v", dirs)
+		ioutil.WriteFile(*contexte.quick, dirsJson, 0644)
 	}
 
 	os.Exit(0)

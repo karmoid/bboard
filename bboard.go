@@ -19,14 +19,10 @@ type (
 	// 	filecount int
 	// }
 
-	HistoryAPI struct {
-		Count int `json:"Count"`
-	}
-
 	DirectoryAPI struct {
-		Path      string       `json:"Path"`
-		Count     int          `json:"Count"`
-		Histories []HistoryAPI `json:"Histories"`
+		Path      string `json:"Path"`
+		Count     int    `json:"Count"`
+		Histories []int  `json:"Histories"`
 	}
 
 	DirectoriesAPI struct {
@@ -34,14 +30,10 @@ type (
 		Directories []DirectoryAPI `json:"Directories"`
 	}
 
-	History struct {
-		Count int
-	}
-
 	Directory struct {
 		Path      string
 		Count     int
-		Histories []History
+		Histories []int
 	}
 
 	Directories struct {
@@ -99,12 +91,13 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 			return err
 		}
 		if info.IsDir() && info.Name() == lookfor {
-			// fmt.Printf("finding a dir with %s: %s - %+v \n", lookfor, path, info.Name())
-			files, err := ioutil.ReadDir(filepath.Dir(path + "\\" + info.Name()))
+			// fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
+			// fmt.Printf("Slow list :%s\n", path)
+			files, err := ioutil.ReadDir(path)
 			if err != nil {
 				return err
 			}
-			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path, Count: len(files), Histories: make([]History, 0)})
+			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path, Count: len(files), Histories: make([]int, 0, 10)})
 		}
 
 		return nil
@@ -143,6 +136,13 @@ func processArgs(ctx *context) (err error) {
 	return nil
 }
 
+func getTrend(ctx *context, count int, hist []int) string {
+	if ctx.processlist && len(hist) > 0 {
+		return fmt.Sprintf(" (%+d)", count-hist[len(hist)-1])
+	}
+	return ""
+}
+
 // No more Wildcard and selection in this Array
 // fixedCopy because the Src array is predefined
 func fixedCount(ctx *context) {
@@ -159,7 +159,7 @@ func fixedCount(ctx *context) {
 		ctx.fileprocessed++
 	}
 	for _, file := range ctx.dirfilesout.Directories {
-		fmt.Printf("Directory processed : %s - %d files\n", file.Path, file.Count)
+		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Count, getTrend(ctx, file.Count, file.Histories))
 		ctx.fileprocessed++
 	}
 	return
@@ -172,9 +172,9 @@ func listCount(ctx *context) bool {
 	var haserror bool
 	for i, dir := range ctx.dirfilesout.Directories {
 		// fmt.Printf("Quick list %d:%s\n", i, dir.Path)
-		files, err := ioutil.ReadDir(filepath.Dir(dir.Path))
+		files, err := ioutil.ReadDir(dir.Path)
 		haserror = err != nil
-		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, History{Count: dir.Count})
+		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, dir.Count)
 		ctx.dirfilesout.Directories[i].Count = len(files)
 	}
 
@@ -335,7 +335,7 @@ func main() {
 		dirs := Directories(contexte.dirfilesout)
 		// fmt.Printf("find json. SRC=%s\n", dirs.Src)
 		dirsJson, _ := json.Marshal(dirs)
-		fmt.Println("new json string: [", string(dirsJson), "]")
+		// fmt.Println("new json string: [", string(dirsJson), "]")
 		// fmt.Printf("%+v", dirs)
 		ioutil.WriteFile(*contexte.quick, dirsJson, 0644)
 	}

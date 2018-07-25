@@ -84,15 +84,20 @@ func getFiles(ctx *context, src string) error {
 
 // Get the files' list to copy
 func getFilesInPath(ctx *context, base string, lookfor string) error {
-	// fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
+	if *ctx.verbose {
+		fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
+
+	}
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
 			return err
 		}
 		if info.IsDir() && info.Name() == lookfor {
-			// fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
-			// fmt.Printf("Slow list :%s\n", path)
+			if *ctx.verbose {
+				fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
+				fmt.Printf("Slow list :%s\n", path)
+			}
 			files, err := ioutil.ReadDir(path)
 			if err != nil {
 				return err
@@ -206,11 +211,16 @@ func genericCount(ctx *context) bool {
 				fmt.Errorf("Process error:", err)
 			}
 		} else if strings.HasSuffix(specs[i], "\\") {
-			// fmt.Print("specific process on Directory\n")
+			if *ctx.verbose {
+				fmt.Print("specific process on Directory\n")
+
+			}
 			paths := strings.Split(specs[i], "\\")
-			// for j := 0; j < len(paths); j++ {
-			// 	fmt.Printf("%d - path: %s\n", j, paths[j])
-			// }
+			if *ctx.verbose {
+				for j := 0; j < len(paths); j++ {
+					fmt.Printf("%d - path: %s\n", j, paths[j])
+				}
+			}
 			if len(paths) > 1 {
 				base := paths[0] + "\\"
 				startat := len(paths) - 1

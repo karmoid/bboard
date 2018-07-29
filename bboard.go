@@ -5,11 +5,32 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dustin/go-humanize"
 )
+
+type detail int
+
+const max_history = 3
+
+const (
+	Shortest = iota
+	Longest
+	Oldest
+	Youngest
+)
+
+var byname = map[string]int{
+	"shortest": Shortest,
+	"longest":  Longest,
+	"oldest":   Oldest,
+	"youngest": Youngest,
+}
 
 // context : Store specific value to alter the program behaviour
 // Like an Args container
@@ -18,11 +39,22 @@ type (
 	// 	path      string
 	// 	filecount int
 	// }
+	StatAPI struct {
+		Count     int           `json:"Count"`
+		LessBytes int64         `json:"Lessbytes"`
+		LbFile    string        `json:"LessbytesFile"`
+		MoreBytes int64         `json:"Morebytes"`
+		MbFile    string        `json:"MorebytesFile"`
+		LessSecs  time.Duration `json:"Lesssecs"`
+		LsFile    string        `json:"LesssecsFile"`
+		MoreSecs  time.Duration `json:"Moresecs"`
+		MsFile    string        `json:"MoresecsFile"`
+	}
 
 	DirectoryAPI struct {
-		Path      string `json:"Path"`
-		Count     int    `json:"Count"`
-		Histories []int  `json:"Histories"`
+		Path      string    `json:"Path"`
+		Current   StatAPI   `json:"Current"`
+		Histories []StatAPI `json:"Histories"`
 	}
 
 	DirectoriesAPI struct {
@@ -30,10 +62,22 @@ type (
 		Directories []DirectoryAPI `json:"Directories"`
 	}
 
+	Stat struct {
+		Count     int
+		LessBytes int64
+		MoreBytes int64
+		LessSecs  time.Duration
+		MoreSecs  time.Duration
+		LbFile    string
+		MbFile    string
+		LsFile    string
+		MsFile    string
+	}
+
 	Directory struct {
 		Path      string
-		Count     int
-		Histories []int
+		Current   Stat
+		Histories []Stat
 	}
 
 	Directories struct {
@@ -45,6 +89,7 @@ type (
 		src           *string
 		verbose       *bool
 		quick         *string
+		details       *string
 		filecount     uint64
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
@@ -57,6 +102,81 @@ type (
 
 // contexte : Hold runtime value (from commande line args)
 var contexte context
+
+func (s Stat) dumpDetails() {
+	if s.Count > 0 {
+		fmt.Printf("\tOldest:(%s-%s)\n\tNewest:(%s-%s)\n\tSmallest:(%s-%s)\n\tLargest:(%s-%s)\n",
+			s.LsFile, humanizeMinutes(int(s.LessSecs.Minutes())), s.MsFile, humanizeMinutes(int(s.MoreSecs.Minutes())), s.LbFile, humanize.Bytes(uint64(s.LessBytes)), s.MbFile, humanize.Bytes(uint64(s.MoreBytes)))
+
+	}
+}
+
+func humanizeUnit(value int, base int, singular string) string {
+	if value > base {
+		days := value / base
+		unit := ""
+		if days > 1 {
+			unit = "s"
+		}
+		return fmt.Sprintf("%d %s%s ", days, singular, unit)
+	} else {
+		return ""
+	}
+}
+
+func humanizeMinutes(min int) string {
+	var humanst string = ""
+	humanst = humanst + humanizeUnit(min, 1440, "day")
+	min = min % 1440
+	humanst = humanst + humanizeUnit(min, 60, "hour")
+	min = min % 60
+	humanst = humanst + humanizeUnit(min, 1, "minute")
+	humanst = strings.Trim(humanst, " ")
+	if humanst != "" {
+		return humanst
+	}
+	return "less than a minute"
+}
+
+func (s Stat) registerFile(file os.FileInfo) Stat {
+	if !file.IsDir() {
+		s.Count++
+		delay := time.Since(file.ModTime())
+		// elapsedtime := humanizeMinutes(int(delay.Minutes()))
+		// if *contexte.verbose {
+		// 	fmt.Printf("file %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+		// }
+		if file.Size() > s.MoreBytes {
+			s.MoreBytes = file.Size()
+			s.MbFile = file.Name()
+			// if *contexte.verbose {
+			// 	fmt.Printf("Taking MoreBytes %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// }
+		}
+		if file.Size() < s.LessBytes {
+			s.LessBytes = file.Size()
+			s.LbFile = file.Name()
+			// if *contexte.verbose {
+			// 	fmt.Printf("Taking LessBytes %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// }
+		}
+		if delay > s.MoreSecs {
+			s.MoreSecs = delay
+			s.MsFile = file.Name()
+			// if *contexte.verbose {
+			// 	fmt.Printf("Taking MoreSecs %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// }
+		}
+		if delay < s.LessSecs {
+			s.LessSecs = delay
+			s.LsFile = file.Name()
+			// if *contexte.verbose {
+			// 	fmt.Printf("Taking LessSecs %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// }
+		}
+	}
+	return s
+}
 
 // Check if path contains Wildcard characters
 func isWildcard(value string) bool {
@@ -102,9 +222,15 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 			if err != nil {
 				return err
 			}
-			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path, Count: len(files), Histories: make([]int, 0, 10)})
+			curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
+			for _, file := range files {
+				curr = curr.registerFile(file)
+			}
+			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path,
+				Histories: make([]Stat, 0, 10),
+				Current:   curr,
+			})
 		}
-
 		return nil
 	})
 
@@ -119,6 +245,7 @@ func setFlagList(ctx *context) {
 	ctx.src = flag.String("src", "", "Source file specification")
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
+	ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
 	flag.Parse()
 }
 
@@ -141,9 +268,9 @@ func processArgs(ctx *context) (err error) {
 	return nil
 }
 
-func getTrend(ctx *context, count int, hist []int) string {
+func getTrend(ctx *context, count int, hist []Stat) string {
 	if ctx.processlist && len(hist) > 0 {
-		return fmt.Sprintf(" (%+d)", count-hist[len(hist)-1])
+		return fmt.Sprintf(" (%+d)", count-hist[len(hist)-1].Count)
 	}
 	return ""
 }
@@ -164,8 +291,23 @@ func fixedCount(ctx *context) {
 		ctx.fileprocessed++
 	}
 	for _, file := range ctx.dirfilesout.Directories {
-		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Count, getTrend(ctx, file.Count, file.Histories))
+		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, getTrend(ctx, file.Current.Count, file.Histories))
+		if *ctx.verbose {
+			file.Current.dumpDetails()
+		}
 		ctx.fileprocessed++
+	}
+	if *ctx.verbose {
+		elapsedtime := ctx.endtime.Sub(ctx.starttime)
+		seconds := int64(elapsedtime.Seconds())
+		if seconds == 0 {
+			seconds = 1
+		}
+		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files: %d processed on %d\n",
+			ctx.endtime,
+			elapsedtime,
+			ctx.fileprocessed,
+			ctx.filecount)
 	}
 	return
 }
@@ -179,23 +321,35 @@ func listCount(ctx *context) bool {
 		// fmt.Printf("Quick list %d:%s\n", i, dir.Path)
 		files, err := ioutil.ReadDir(dir.Path)
 		haserror = err != nil
-		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, dir.Count)
-		ctx.dirfilesout.Directories[i].Count = len(files)
+		if len(ctx.dirfilesout.Directories[i].Histories) >= max_history {
+			// fmt.Printf("Should manage fixed size (%d/%d)", len(ctx.dirfilesout.Directories[i].Histories), max_history)
+			// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
+			// 	fmt.Printf("before trunc slice %d: Count:%d\n", i, hist.Count)
+			// }
+			neededHistories := ctx.dirfilesout.Directories[i].Histories[1:]
+			// for i, hist := range neededHistories {
+			// 	fmt.Printf("after trunc slice %d: Count:%d\n", i, hist.Count)
+			// }
+			copiedHistories := make([]Stat, max_history-1)
+			copy(copiedHistories, neededHistories)
+			// for i, hist := range copiedHistories {
+			// 	fmt.Printf("after copied slice %d: Count:%d\n", i, hist.Count)
+			// }
+			ctx.dirfilesout.Directories[i].Histories = copiedHistories
+		}
+		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, dir.Current)
+		// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
+		// 	fmt.Printf("after append %d: Count:%d\n", i, hist.Count)
+		// }
+		curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
+		for _, file := range files {
+			curr = curr.registerFile(file)
+			// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
+		}
+		ctx.dirfilesout.Directories[i].Current = curr
 	}
 
 	fixedCount(ctx)
-	if *ctx.verbose {
-		elapsedtime := ctx.endtime.Sub(ctx.starttime)
-		seconds := int64(elapsedtime.Seconds())
-		if seconds == 0 {
-			seconds = 1
-		}
-		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files: %d processed on %d\n",
-			ctx.endtime,
-			elapsedtime,
-			ctx.fileprocessed,
-			ctx.filecount)
-	}
 	return haserror
 }
 
@@ -250,18 +404,6 @@ func genericCount(ctx *context) bool {
 	}
 
 	fixedCount(ctx)
-	if *ctx.verbose {
-		elapsedtime := ctx.endtime.Sub(ctx.starttime)
-		seconds := int64(elapsedtime.Seconds())
-		if seconds == 0 {
-			seconds = 1
-		}
-		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files: %d processed on %d\n",
-			ctx.endtime,
-			elapsedtime,
-			ctx.fileprocessed,
-			ctx.filecount)
-	}
 	return haserror
 }
 

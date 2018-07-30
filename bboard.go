@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"github.com/fatih/color"
 )
 
 type detail int
 
-const max_history = 3
+const max_history = 10
 
 const (
 	Shortest = iota
@@ -90,6 +91,7 @@ type (
 		verbose       *bool
 		quick         *string
 		details       *string
+		flagNoColor   *bool
 		filecount     uint64
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
@@ -246,11 +248,13 @@ func setFlagList(ctx *context) {
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
 	ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
+	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
 	flag.Parse()
 }
 
 // Check args and return error if anything is wrong
 func processArgs(ctx *context) (err error) {
+
 	required := []string{"src"}
 	setFlagList(&contexte)
 
@@ -264,13 +268,28 @@ func processArgs(ctx *context) (err error) {
 	}
 	ctx.allfilesout = make([]os.FileInfo, 0, 300)
 	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: make([]Directory, 0, 100)}
+	if *ctx.flagNoColor {
+		color.NoColor = true // disables colorized output
+	}
 
 	return nil
 }
 
+func analyzeHist(hist []Stat) (retour string) {
+	if len(hist) > 1 {
+		retour = "past"
+		for i := len(hist) - 1; i > 0; i-- {
+			retour = retour + fmt.Sprintf(":%+d", hist[i].Count-hist[i-1].Count)
+		}
+	} else {
+		retour = ""
+	}
+	return
+}
+
 func getTrend(ctx *context, count int, hist []Stat) string {
 	if ctx.processlist && len(hist) > 0 {
-		return fmt.Sprintf(" (%+d)", count-hist[len(hist)-1].Count)
+		return fmt.Sprintf(" (%+d)%s", count-hist[len(hist)-1].Count, analyzeHist(hist))
 	}
 	return ""
 }
@@ -291,7 +310,9 @@ func fixedCount(ctx *context) {
 		ctx.fileprocessed++
 	}
 	for _, file := range ctx.dirfilesout.Directories {
+		color.Set(color.FgHiWhite)
 		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, getTrend(ctx, file.Current.Count, file.Histories))
+		color.Unset()
 		if *ctx.verbose {
 			file.Current.dumpDetails()
 		}

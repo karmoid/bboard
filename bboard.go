@@ -87,10 +87,10 @@ type (
 	}
 
 	context struct {
-		src           *string
-		verbose       *bool
-		quick         *string
-		details       *string
+		src     *string
+		verbose *bool
+		quick   *string
+		// details       *string
 		flagNoColor   *bool
 		filecount     uint64
 		fileprocessed uint64
@@ -206,20 +206,20 @@ func getFiles(ctx *context, src string) error {
 
 // Get the files' list to copy
 func getFilesInPath(ctx *context, base string, lookfor string) error {
-	if *ctx.verbose {
-		fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
-
-	}
+	// if *ctx.verbose {
+	// 	fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
+	//
+	// }
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
 			return err
 		}
 		if info.IsDir() && info.Name() == lookfor {
-			if *ctx.verbose {
-				fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
-				fmt.Printf("Slow list :%s\n", path)
-			}
+			// if *ctx.verbose {
+			// 	fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
+			// 	fmt.Printf("Slow list :%s\n", path)
+			// }
 			files, err := ioutil.ReadDir(path)
 			if err != nil {
 				return err
@@ -247,7 +247,7 @@ func setFlagList(ctx *context) {
 	ctx.src = flag.String("src", "", "Source file specification")
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
-	ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
+	// ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
 	flag.Parse()
 }
@@ -301,14 +301,13 @@ func fixedCount(ctx *context) {
 	if *ctx.verbose {
 		fmt.Printf("Files: %d\n",
 			ctx.filecount)
-		ctx.starttime = time.Now()
 		fmt.Printf("**START** (%v)\n", ctx.starttime)
-		defer func() { ctx.endtime = time.Now() }()
 	}
 	for _, file := range ctx.allfilesout {
 		fmt.Printf("File processed : %s\n", file.Name())
 		ctx.fileprocessed++
 	}
+
 	for _, file := range ctx.dirfilesout.Directories {
 		color.Set(color.FgHiWhite)
 		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, getTrend(ctx, file.Current.Count, file.Histories))
@@ -318,17 +317,18 @@ func fixedCount(ctx *context) {
 		}
 		ctx.fileprocessed++
 	}
+	ctx.endtime = time.Now()
 	if *ctx.verbose {
 		elapsedtime := ctx.endtime.Sub(ctx.starttime)
 		seconds := int64(elapsedtime.Seconds())
 		if seconds == 0 {
 			seconds = 1
 		}
-		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files: %d processed on %d\n",
+		fmt.Printf("**END** (%v)\n  REPORT:\n  - Elapsed time: %v\n  - Files/Dirs: %d processed\n",
 			ctx.endtime,
 			elapsedtime,
 			ctx.fileprocessed,
-			ctx.filecount)
+		)
 	}
 	return
 }
@@ -387,15 +387,14 @@ func genericCount(ctx *context) bool {
 			}
 		} else if strings.HasSuffix(specs[i], "\\") {
 			if *ctx.verbose {
-				fmt.Print("specific process on Directory\n")
-
+				// fmt.Print("specific process on Directory\n")
 			}
 			paths := strings.Split(specs[i], "\\")
-			if *ctx.verbose {
-				for j := 0; j < len(paths); j++ {
-					fmt.Printf("%d - path: %s\n", j, paths[j])
-				}
-			}
+			// if *ctx.verbose {
+			// 	for j := 0; j < len(paths); j++ {
+			// 		fmt.Printf("%d - path: %s\n", j, paths[j])
+			// 	}
+			// }
 			if len(paths) > 1 {
 				base := paths[0] + "\\"
 				startat := len(paths) - 1
@@ -416,7 +415,7 @@ func genericCount(ctx *context) bool {
 			}
 
 		} else {
-			fmt.Print("faultback process on Wildcard\n")
+			// fmt.Print("faultback process on Wildcard\n")
 			if err := getFiles(ctx, specs[i]); err != nil {
 				haserror = true
 				fmt.Errorf("Process error:", err)
@@ -466,6 +465,8 @@ func main() {
 		fmt.Println(err)
 		os.Exit(2)
 	}
+
+	contexte.starttime = time.Now()
 
 	if *contexte.quick != "" {
 		contexte.processlist = getConfig(&contexte)

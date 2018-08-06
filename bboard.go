@@ -89,6 +89,7 @@ type (
 	context struct {
 		src     *string
 		verbose *bool
+		filter0 *bool
 		quick   *string
 		// details       *string
 		flagNoColor   *bool
@@ -246,6 +247,7 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 func setFlagList(ctx *context) {
 	ctx.src = flag.String("src", "", "Source file specification")
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
+	ctx.filter0 = flag.Bool("filternull", false, "Filtering 0 valued line")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
 	// ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
@@ -287,11 +289,11 @@ func analyzeHist(hist []Stat) (retour string) {
 	return
 }
 
-func getTrend(ctx *context, count int, hist []Stat) string {
+func getTrend(ctx *context, count int, hist []Stat) (bool, string) {
 	if ctx.processlist && len(hist) > 0 {
-		return fmt.Sprintf(" (%+d)%s", count-hist[len(hist)-1].Count, analyzeHist(hist))
+		return (count > 0 || count-hist[len(hist)-1].Count != 0), fmt.Sprintf(" (%+d)%s", count-hist[len(hist)-1].Count, analyzeHist(hist))
 	}
-	return ""
+	return false, ""
 }
 
 // No more Wildcard and selection in this Array
@@ -309,9 +311,17 @@ func fixedCount(ctx *context) {
 	}
 
 	for _, file := range ctx.dirfilesout.Directories {
-		color.Set(color.FgHiWhite)
-		fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, getTrend(ctx, file.Current.Count, file.Histories))
-		color.Unset()
+		highlight, trend := getTrend(ctx, file.Current.Count, file.Histories)
+
+		if highlight {
+			color.Set(color.FgHiWhite)
+		}
+		if !*ctx.filter0 || highlight {
+			fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, trend)
+		}
+		if highlight {
+			color.Unset()
+		}
 		if *ctx.verbose {
 			file.Current.dumpDetails()
 		}
@@ -457,7 +467,9 @@ func getConfig(ctx *context) bool {
 }
 
 // VersionNum : Litteral version
-const VersionNum = "1.0"
+// 1.0 : Original
+// 1.1 : Highlight important data
+const VersionNum = "1.1"
 
 func main() {
 	fmt.Printf("bboard - Count files - C.m. 2018 - V%s\n", VersionNum)

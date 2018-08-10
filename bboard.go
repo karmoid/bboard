@@ -301,8 +301,7 @@ func getTrend(ctx *context, count int, hist []Stat) (bool, string) {
 func fixedCount(ctx *context) {
 	ctx.filecount = uint64(len(ctx.allfilesout))
 	if *ctx.verbose {
-		fmt.Printf("Files: %d\n",
-			ctx.filecount)
+		fmt.Printf("Files: %d\n", ctx.filecount)
 		fmt.Printf("**START** (%v)\n", ctx.starttime)
 	}
 	for _, file := range ctx.allfilesout {

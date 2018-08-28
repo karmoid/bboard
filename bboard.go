@@ -18,6 +18,7 @@ import (
 type detail int
 
 const max_history = 10
+const p_debug = false
 
 const (
 	Shortest = iota
@@ -83,7 +84,7 @@ type (
 
 	Directories struct {
 		Src         string
-		Directories []Directory
+		Directories map[string]Directory
 	}
 
 	context struct {
@@ -93,6 +94,8 @@ type (
 		quick   *string
 		// details       *string
 		flagNoColor   *bool
+		readonly      *bool
+		feedback      *int
 		filecount     uint64
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
@@ -109,8 +112,7 @@ var contexte context
 func (s Stat) dumpDetails() {
 	if s.Count > 0 {
 		fmt.Printf("\tOldest:(%s-%s)\n\tNewest:(%s-%s)\n\tSmallest:(%s-%s)\n\tLargest:(%s-%s)\n",
-			s.LsFile, humanizeMinutes(int(s.LessSecs.Minutes())), s.MsFile, humanizeMinutes(int(s.MoreSecs.Minutes())), s.LbFile, humanize.Bytes(uint64(s.LessBytes)), s.MbFile, humanize.Bytes(uint64(s.MoreBytes)))
-
+			s.LsFile, humanizeMinutes(int(s.MoreSecs.Minutes())), s.MsFile, humanizeMinutes(int(s.LessSecs.Minutes())), s.LbFile, humanize.Bytes(uint64(s.LessBytes)), s.MbFile, humanize.Bytes(uint64(s.MoreBytes)))
 	}
 }
 
@@ -146,35 +148,36 @@ func (s Stat) registerFile(file os.FileInfo) Stat {
 		s.Count++
 		delay := time.Since(file.ModTime())
 		// elapsedtime := humanizeMinutes(int(delay.Minutes()))
-		// if *contexte.verbose {
+		// if p_debug {
 		// 	fmt.Printf("file %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+		// 	fmt.Printf("current stat %s, %v->%v, %s->%s\n", file.Name(), s.LessSecs, s.MoreSecs, humanize.Bytes(uint64(s.LessBytes)), humanize.Bytes(uint64(s.MoreBytes)))
 		// }
 		if file.Size() > s.MoreBytes {
 			s.MoreBytes = file.Size()
 			s.MbFile = file.Name()
-			// if *contexte.verbose {
-			// 	fmt.Printf("Taking MoreBytes %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// if p_debug {
+			// 	fmt.Printf("Taking MoreBytes %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
 			// }
 		}
 		if file.Size() < s.LessBytes {
 			s.LessBytes = file.Size()
 			s.LbFile = file.Name()
-			// if *contexte.verbose {
-			// 	fmt.Printf("Taking LessBytes %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// if p_debug {
+			// 	fmt.Printf("Taking LessBytes %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
 			// }
 		}
 		if delay > s.MoreSecs {
 			s.MoreSecs = delay
 			s.MsFile = file.Name()
-			// if *contexte.verbose {
-			// 	fmt.Printf("Taking MoreSecs %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// if p_debug {
+			// 	fmt.Printf("Taking MoreSecs %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
 			// }
 		}
 		if delay < s.LessSecs {
 			s.LessSecs = delay
 			s.LsFile = file.Name()
-			// if *contexte.verbose {
-			// 	fmt.Printf("Taking LessSecs %s, %v-(%s), %d\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
+			// if p_debug {
+			// 	fmt.Printf("Taking LessSecs %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
 			// }
 		}
 	}
@@ -211,28 +214,71 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 	// 	fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
 	//
 	// }
+	filecount := 0
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
 			return err
 		}
-		if info.IsDir() && info.Name() == lookfor {
-			// if *ctx.verbose {
-			// 	fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
-			// 	fmt.Printf("Slow list :%s\n", path)
+		filecount++
+		if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
+			fmt.Printf("(%d)-", filecount)
+		}
+		if info.IsDir() {
+			if strings.ToLower(info.Name()) == strings.ToLower(lookfor) {
+				// if p_debug {
+				// 	fmt.Printf("INCLUDED: %s, %s, %v\n", path, info.Name(), info.IsDir())
+				// }
+
+				// if *ctx.verbose {
+				// 	fmt.Printf("finding a dir with lookfor %s: path:%s - info.name():%+v \n", lookfor, path, info.Name())
+				// 	fmt.Printf("Slow list :%s\n", path)
+				// }
+
+				// files, err := ioutil.ReadDir(path)
+				// if err != nil {
+				// 	if *ctx.details {
+				// 		fmt.Printf("Exit for Walk with error : %v\n", err)
+				// 	}
+				// 	return err
+				// }
+
+				curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
+
+				// for _, file := range files {
+				// 	curr = curr.registerFile(file)
+				// }
+
+				ctx.dirfilesout.Directories[path] = Directory{Path: path, Histories: make([]Stat, 0, 10), Current: curr}
+			} else {
+				// if p_debug {
+				// 	fmt.Printf("--- Directory Excluded: %s, %s, %v\n", path, info.Name(), info.IsDir())
+				// }
+			}
+		} else {
+			// Not Dir. So File
+			paths := strings.Split(path, "\\")
+			// if p_debug {
+			// 	for j := 0; j < len(paths); j++ {
+			// 		fmt.Printf("%d - path: %s\n", j, paths[j])
+			// 	}
 			// }
-			files, err := ioutil.ReadDir(path)
-			if err != nil {
-				return err
+			if strings.ToLower(paths[len(paths)-2]) == strings.ToLower(lookfor) {
+				// if p_debug {
+				// 	fmt.Printf("--- File Included: %s, %s, %v\n", path, info.Name(), info.IsDir())
+				// }
+				rootpath := strings.Join(paths[0:len(paths)-1], "\\")
+				// if p_debug {
+				// 	fmt.Printf("--- Path rebuilt : %s\n", rootpath)
+				// }
+				dir := ctx.dirfilesout.Directories[rootpath]
+				dir.Current = dir.Current.registerFile(info)
+				ctx.dirfilesout.Directories[rootpath] = dir
+			} else {
+				// if p_debug {
+				// 	fmt.Printf("--- Excluded: %s, %s, %v\n", path, info.Name(), info.IsDir())
+				// }
 			}
-			curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
-			for _, file := range files {
-				curr = curr.registerFile(file)
-			}
-			ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, Directory{Path: path,
-				Histories: make([]Stat, 0, 10),
-				Current:   curr,
-			})
 		}
 		return nil
 	})
@@ -250,6 +296,8 @@ func setFlagList(ctx *context) {
 	ctx.filter0 = flag.Bool("filternull", false, "Filtering 0 valued line")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
 	// ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
+	ctx.readonly = flag.Bool("readonly", false, "don't get files. Dump json file")
+	ctx.feedback = flag.Int("feedback", 0, "Display file processing (feedback count)")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
 	flag.Parse()
 }
@@ -269,7 +317,7 @@ func processArgs(ctx *context) (err error) {
 		}
 	}
 	ctx.allfilesout = make([]os.FileInfo, 0, 300)
-	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: make([]Directory, 0, 100)}
+	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: map[string]Directory{}}
 	if *ctx.flagNoColor {
 		color.NoColor = true // disables colorized output
 	}
@@ -311,6 +359,7 @@ func fixedCount(ctx *context) {
 
 	for _, file := range ctx.dirfilesout.Directories {
 		highlight, trend := getTrend(ctx, file.Current.Count, file.Histories)
+		highlight = highlight || (*ctx.readonly && file.Current.Count > 0)
 
 		if highlight {
 			color.Set(color.FgHiWhite)
@@ -322,7 +371,9 @@ func fixedCount(ctx *context) {
 			color.Unset()
 		}
 		if *ctx.verbose {
-			file.Current.dumpDetails()
+			if !*ctx.filter0 || highlight {
+				file.Current.dumpDetails()
+			}
 		}
 		ctx.fileprocessed++
 	}
@@ -342,43 +393,58 @@ func fixedCount(ctx *context) {
 	return
 }
 
-// Check if src is a wildcard expression
-// if True, we must have a Path in dst
-// Else dst could be Path or File
+// if we had a Json file, and in a quickrefresh, we'll use the file entries
+//
 func listCount(ctx *context) bool {
 	var haserror bool
-	for i, dir := range ctx.dirfilesout.Directories {
-		// fmt.Printf("Quick list %d:%s\n", i, dir.Path)
-		files, err := ioutil.ReadDir(dir.Path)
-		haserror = err != nil
-		if len(ctx.dirfilesout.Directories[i].Histories) >= max_history {
-			// fmt.Printf("Should manage fixed size (%d/%d)", len(ctx.dirfilesout.Directories[i].Histories), max_history)
-			// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
-			// 	fmt.Printf("before trunc slice %d: Count:%d\n", i, hist.Count)
-			// }
-			neededHistories := ctx.dirfilesout.Directories[i].Histories[1:]
-			// for i, hist := range neededHistories {
-			// 	fmt.Printf("after trunc slice %d: Count:%d\n", i, hist.Count)
-			// }
-			copiedHistories := make([]Stat, max_history-1)
-			copy(copiedHistories, neededHistories)
-			// for i, hist := range copiedHistories {
-			// 	fmt.Printf("after copied slice %d: Count:%d\n", i, hist.Count)
-			// }
-			ctx.dirfilesout.Directories[i].Histories = copiedHistories
-		}
-		ctx.dirfilesout.Directories[i].Histories = append(ctx.dirfilesout.Directories[i].Histories, dir.Current)
-		// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
-		// 	fmt.Printf("after append %d: Count:%d\n", i, hist.Count)
-		// }
-		curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
-		for _, file := range files {
-			curr = curr.registerFile(file)
-			// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
-		}
-		ctx.dirfilesout.Directories[i].Current = curr
+	if *ctx.verbose {
+		fmt.Println("Quick Process - %d Directories", len(ctx.dirfilesout.Directories))
 	}
-
+	filecount := 0
+	if *ctx.readonly {
+		if *ctx.verbose {
+			fmt.Println("Read Quick list")
+		}
+	} else {
+		for i, dir := range ctx.dirfilesout.Directories {
+			if p_debug {
+				fmt.Printf("Refresh Quick list %s %d\n", dir.Path, dir.Current.Count)
+			}
+			files, err := ioutil.ReadDir(dir.Path)
+			haserror = err != nil
+			if len(ctx.dirfilesout.Directories[i].Histories) >= max_history {
+				// fmt.Printf("Should manage fixed size (%d/%d)", len(ctx.dirfilesout.Directories[i].Histories), max_history)
+				// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
+				// 	fmt.Printf("before trunc slice %d: Count:%d\n", i, hist.Count)
+				// }
+				neededHistories := dir.Histories[1:]
+				// for i, hist := range neededHistories {
+				// 	fmt.Printf("after trunc slice %d: Count:%d\n", i, hist.Count)
+				// }
+				copiedHistories := make([]Stat, max_history-1)
+				copy(copiedHistories, neededHistories)
+				// for i, hist := range copiedHistories {
+				// 	fmt.Printf("after copied slice %d: Count:%d\n", i, hist.Count)
+				// }
+				dir.Histories = copiedHistories
+			}
+			dir.Histories = append(dir.Histories, dir.Current)
+			// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
+			// 	fmt.Printf("after append %d: Count:%d\n", i, hist.Count)
+			// }
+			curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
+			for _, file := range files {
+				curr = curr.registerFile(file)
+				filecount++
+				if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
+					fmt.Printf("(%d)-", filecount)
+				}
+				// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
+			}
+			dir.Current = curr
+			ctx.dirfilesout.Directories[i] = dir
+		}
+	}
 	fixedCount(ctx)
 	return haserror
 }
@@ -459,7 +525,7 @@ func getConfig(ctx *context) bool {
 		return false
 	}
 	for _, onedir := range Dir.Directories {
-		ctx.dirfilesout.Directories = append(ctx.dirfilesout.Directories, onedir)
+		ctx.dirfilesout.Directories[onedir.Path] = onedir
 		// fmt.Printf("Just added %d: %s-%d\n", i, onedir.Path, onedir.Count)
 	}
 	return true
@@ -468,7 +534,8 @@ func getConfig(ctx *context) bool {
 // VersionNum : Litteral version
 // 1.0 : Original
 // 1.1 : Highlight important data
-const VersionNum = "1.1"
+// 1.2 : Optimization on first discovery. Walk already work on files. So use Walk file entry
+const VersionNum = "1.2"
 
 func main() {
 	fmt.Printf("bboard - Count files - C.m. 2018 - V%s\n", VersionNum)

@@ -215,6 +215,7 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 	//
 	// }
 	filecount := 0
+	dircount := 0
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
@@ -222,9 +223,10 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 		}
 		filecount++
 		if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
-			fmt.Printf("(%d)-", filecount)
+			fmt.Printf("f/d(%d/%d)-", filecount, dircount)
 		}
 		if info.IsDir() {
+			dircount++
 			if strings.ToLower(info.Name()) == strings.ToLower(lookfor) {
 				// if p_debug {
 				// 	fmt.Printf("INCLUDED: %s, %s, %v\n", path, info.Name(), info.IsDir())
@@ -398,9 +400,10 @@ func fixedCount(ctx *context) {
 func listCount(ctx *context) bool {
 	var haserror bool
 	if *ctx.verbose {
-		fmt.Println("Quick Process - %d Directories", len(ctx.dirfilesout.Directories))
+		fmt.Printf("Quick Process - %d Directories\n", len(ctx.dirfilesout.Directories))
 	}
 	filecount := 0
+	dircount := 0
 	if *ctx.readonly {
 		if *ctx.verbose {
 			fmt.Println("Read Quick list")
@@ -410,6 +413,7 @@ func listCount(ctx *context) bool {
 			if p_debug {
 				fmt.Printf("Refresh Quick list %s %d\n", dir.Path, dir.Current.Count)
 			}
+			dircount++
 			files, err := ioutil.ReadDir(dir.Path)
 			haserror = err != nil
 			if len(ctx.dirfilesout.Directories[i].Histories) >= max_history {
@@ -437,7 +441,7 @@ func listCount(ctx *context) bool {
 				curr = curr.registerFile(file)
 				filecount++
 				if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
-					fmt.Printf("(%d)-", filecount)
+					fmt.Printf("f/d(%d/%d)-", filecount, dircount)
 				}
 				// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
 			}
@@ -535,7 +539,8 @@ func getConfig(ctx *context) bool {
 // 1.0 : Original
 // 1.1 : Highlight important data
 // 1.2 : Optimization on first discovery. Walk already work on files. So use Walk file entry
-const VersionNum = "1.2"
+// 1.3 : Feedback on directory count
+const VersionNum = "1.3"
 
 func main() {
 	fmt.Printf("bboard - Count files - C.m. 2018 - V%s\n", VersionNum)

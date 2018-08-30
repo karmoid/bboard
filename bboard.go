@@ -88,14 +88,16 @@ type (
 	}
 
 	context struct {
-		src     *string
-		verbose *bool
-		filter0 *bool
-		quick   *string
-		// details       *string
+		src           *string
+		verbose       *bool
+		filter0       *bool
+		quick         *string
+		exclude       *string
+		details       *string
 		flagNoColor   *bool
 		readonly      *bool
 		feedback      *int
+		history       *int
 		filecount     uint64
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
@@ -209,13 +211,17 @@ func getFiles(ctx *context, src string) error {
 }
 
 // Get the files' list to copy
-func getFilesInPath(ctx *context, base string, lookfor string) error {
+func getFilesInPath(ctx *context, base string, lookingfor string) error {
 	// if *ctx.verbose {
 	// 	fmt.Printf("Looking for directory [%s] in [%s]", lookfor, base)
 	//
 	// }
+	look := strings.Split(lookingfor, ";")
+	exclude := strings.Split(*ctx.exclude, ";")
+	// fmt.Printf("exclude %v\n", exclude)
 	filecount := 0
 	dircount := 0
+	couldprocess := false
 	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", base, err)
@@ -223,11 +229,23 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 		}
 		filecount++
 		if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
-			fmt.Printf("f/d(%d/%d)-", filecount, dircount)
+			fmt.Printf("f/d(%d/%d)\r", filecount, dircount)
 		}
 		if info.IsDir() {
 			dircount++
-			if strings.ToLower(info.Name()) == strings.ToLower(lookfor) {
+			for i := 0; i < len(exclude); i++ {
+				if strings.ToLower(info.Name()) == strings.ToLower(exclude[i]) {
+					if *ctx.verbose {
+						fmt.Printf("Skipped %s because in exclude list %s [%s]\n", path, *ctx.exclude, exclude[i])
+					}
+					return filepath.SkipDir
+				}
+			}
+			couldprocess = false
+			for i := 0; i < len(look); i++ {
+				couldprocess = couldprocess || strings.ToLower(info.Name()) == strings.ToLower(look[i])
+			}
+			if couldprocess {
 				// if p_debug {
 				// 	fmt.Printf("INCLUDED: %s, %s, %v\n", path, info.Name(), info.IsDir())
 				// }
@@ -265,7 +283,11 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 			// 		fmt.Printf("%d - path: %s\n", j, paths[j])
 			// 	}
 			// }
-			if strings.ToLower(paths[len(paths)-2]) == strings.ToLower(lookfor) {
+			couldprocess = false
+			for i := 0; i < len(look); i++ {
+				couldprocess = couldprocess || strings.ToLower(paths[len(paths)-2]) == strings.ToLower(look[i])
+			}
+			if couldprocess {
 				// if p_debug {
 				// 	fmt.Printf("--- File Included: %s, %s, %v\n", path, info.Name(), info.IsDir())
 				// }
@@ -284,6 +306,7 @@ func getFilesInPath(ctx *context, base string, lookfor string) error {
 		}
 		return nil
 	})
+	fmt.Printf("Processed files(%d) & Directories(%d)\n", filecount, dircount)
 
 	if err != nil {
 		fmt.Printf("error walking the path %q: %v\n", base, err)
@@ -297,9 +320,11 @@ func setFlagList(ctx *context) {
 	ctx.verbose = flag.Bool("verbose", false, "Verbose mode")
 	ctx.filter0 = flag.Bool("filternull", false, "Filtering 0 valued line")
 	ctx.quick = flag.String("quickrefresh", "", "File to store cached data - quicker search/trend mode")
-	// ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
+	ctx.exclude = flag.String("exclude", "", "Directories to exclude")
+	ctx.details = flag.String("details", "", "File to store detail data - csv/xls mode")
 	ctx.readonly = flag.Bool("readonly", false, "don't get files. Dump json file")
 	ctx.feedback = flag.Int("feedback", 0, "Display file processing (feedback count)")
+	ctx.history = flag.Int("history", max_history, "Keep historical data maximum")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
 	flag.Parse()
 }
@@ -416,7 +441,7 @@ func listCount(ctx *context) bool {
 			dircount++
 			files, err := ioutil.ReadDir(dir.Path)
 			haserror = err != nil
-			if len(ctx.dirfilesout.Directories[i].Histories) >= max_history {
+			if len(ctx.dirfilesout.Directories[i].Histories) >= *ctx.history {
 				// fmt.Printf("Should manage fixed size (%d/%d)", len(ctx.dirfilesout.Directories[i].Histories), max_history)
 				// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
 				// 	fmt.Printf("before trunc slice %d: Count:%d\n", i, hist.Count)
@@ -425,7 +450,7 @@ func listCount(ctx *context) bool {
 				// for i, hist := range neededHistories {
 				// 	fmt.Printf("after trunc slice %d: Count:%d\n", i, hist.Count)
 				// }
-				copiedHistories := make([]Stat, max_history-1)
+				copiedHistories := make([]Stat, *ctx.history-1)
 				copy(copiedHistories, neededHistories)
 				// for i, hist := range copiedHistories {
 				// 	fmt.Printf("after copied slice %d: Count:%d\n", i, hist.Count)
@@ -441,7 +466,7 @@ func listCount(ctx *context) bool {
 				curr = curr.registerFile(file)
 				filecount++
 				if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
-					fmt.Printf("f/d(%d/%d)-", filecount, dircount)
+					fmt.Printf("f/d(%d/%d)\r", filecount, dircount)
 				}
 				// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
 			}
@@ -455,6 +480,7 @@ func listCount(ctx *context) bool {
 
 func genericCount(ctx *context) bool {
 	var haserror bool
+	dir := map[string]string{}
 	specs := strings.Split(*ctx.src, ";")
 	for i := 0; i < len(specs); i++ {
 		// fmt.Printf("[%d/%d] %s\n", i+1, len(specs), specs[i])
@@ -465,9 +491,6 @@ func genericCount(ctx *context) bool {
 				fmt.Errorf("Process error:", err)
 			}
 		} else if strings.HasSuffix(specs[i], "\\") {
-			if *ctx.verbose {
-				// fmt.Print("specific process on Directory\n")
-			}
 			paths := strings.Split(specs[i], "\\")
 			// if *ctx.verbose {
 			// 	for j := 0; j < len(paths); j++ {
@@ -484,10 +507,15 @@ func genericCount(ctx *context) bool {
 				for j := 1; j < startat; j++ {
 					base = base + paths[j] + "\\"
 				}
-				if err := getFilesInPath(ctx, base, lookfor); err != nil {
-					haserror = true
-					fmt.Errorf("Process error: Not enough args [%s]", specs[i])
+				if dir[base] != "" {
+					dir[base] = dir[base] + ";" + lookfor
+				} else {
+					dir[base] = lookfor
 				}
+				// if err := getFilesInPath(ctx, base, lookfor); err != nil {
+				// 	haserror = true
+				// 	fmt.Errorf("Process error: Not enough args [%s]", specs[i])
+				// }
 			} else {
 				haserror = true
 				fmt.Errorf("Process error")
@@ -499,6 +527,15 @@ func genericCount(ctx *context) bool {
 				haserror = true
 				fmt.Errorf("Process error:", err)
 			}
+		}
+	}
+	for p, look := range dir {
+		if *ctx.verbose {
+			fmt.Printf("processing path %s looking for %s\n", p, look)
+		}
+		if err := getFilesInPath(ctx, p, look); err != nil {
+			haserror = true
+			fmt.Errorf("Process error for path [%s] looking for %s", p, look)
 		}
 	}
 

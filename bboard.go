@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math"
 	"os"
@@ -102,6 +103,7 @@ type (
 		fileprocessed uint64
 		allfilesout   []os.FileInfo
 		dirfilesout   Directories
+		detailsout    *os.File
 		starttime     time.Time
 		endtime       time.Time
 		processlist   bool
@@ -295,6 +297,12 @@ func getFilesInPath(ctx *context, base string, lookingfor string) error {
 				// if p_debug {
 				// 	fmt.Printf("--- Path rebuilt : %s\n", rootpath)
 				// }
+				if *ctx.details != "" {
+					if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%s\t%v\t%d\n", rootpath, info.Name(), info.ModTime(), info.Size())); err != nil {
+						fmt.Println(err)
+						os.Exit(1)
+					}
+				}
 				dir := ctx.dirfilesout.Directories[rootpath]
 				dir.Current = dir.Current.registerFile(info)
 				ctx.dirfilesout.Directories[rootpath] = dir
@@ -463,6 +471,12 @@ func listCount(ctx *context) bool {
 			// }
 			curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
 			for _, file := range files {
+				if *ctx.details != "" {
+					if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%s\t%v\t%d\n", dir.Path, file.Name(), file.ModTime(), file.Size())); err != nil {
+						fmt.Println(err)
+						os.Exit(1)
+					}
+				}
 				curr = curr.registerFile(file)
 				filecount++
 				if *ctx.feedback > 0 && filecount%*ctx.feedback == 0 {
@@ -577,13 +591,27 @@ func getConfig(ctx *context) bool {
 // 1.1 : Highlight important data
 // 1.2 : Optimization on first discovery. Walk already work on files. So use Walk file entry
 // 1.3 : Feedback on directory count
-const VersionNum = "1.3"
+// 1.4 : Dump fichiers dans CSV (Tab)
+const VersionNum = "1.4"
 
 func main() {
 	fmt.Printf("bboard - Count files - C.m. 2018 - V%s\n", VersionNum)
 	if err := processArgs(&contexte); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
+	}
+	var err error
+	if *contexte.details != "" {
+		contexte.detailsout, err = os.Create(*contexte.details)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(3)
+		}
+		defer contexte.detailsout.Close()
+		if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\t%s\n", "path", "name", "modified", "size")); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	}
 
 	contexte.starttime = time.Now()

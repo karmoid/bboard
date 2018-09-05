@@ -414,6 +414,12 @@ func fixedCount(ctx *context) {
 		}
 		if !*ctx.filter0 || highlight {
 			fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, trend)
+			if *ctx.details != "" && *ctx.readonly {
+				if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%d\t%s\n", file.Path, file.Current.Count, trend)); err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+			}
 		}
 		if highlight {
 			color.Unset()
@@ -633,9 +639,16 @@ func main() {
 			os.Exit(3)
 		}
 		defer contexte.detailsout.Close()
-		if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\t%s\n", "path", "name", "modified", "size")); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		if *contexte.readonly {
+			if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\n", "path", "filecount", "trend")); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		} else {
+			if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\t%s\n", "path", "name", "modified", "size")); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
 		}
 	}
 

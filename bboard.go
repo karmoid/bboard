@@ -623,10 +623,11 @@ func getConfig(ctx *context) bool {
 // 1.2 : Optimization on first discovery. Walk already work on files. So use Walk file entry
 // 1.3 : Feedback on directory count
 // 1.4 : Dump fichiers dans CSV (Tab)
-const VersionNum = "1.4"
+// 1.5 : Dump fichiers dans CSV (Tab) pour le mode ReadOnly & Couleur+Legende
+const VersionNum = "1.5"
 
 func main() {
-	fmt.Printf("bboard - Count files - C.m. 2018 - V%s\n", VersionNum)
+	fmt.Printf("bboard - Files analysis - C.m. 2018 - V%s\n", VersionNum)
 	if err := processArgs(&contexte); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
@@ -670,27 +671,6 @@ func main() {
 		}
 	}
 
-	// var jsonBlob = []byte(`
-	//       {"Src":"c:\\tools\\packages\\",
-	// 				"Directories":[
-	// 				{"Path":"c:\\tools\\toto\\packages\\1", "Count":12, "History":[13,24,34,56]},
-	// 				{"Path":"c:\\tools\\toto\\packages\\2", "Count":21, "History":[31,12,4,6]}
-	// 				]}
-	//   `)
-	//
-	// dirsAPI := DirectoriesAPI{}
-	// err := json.Unmarshal(jsonBlob, &dirsAPI)
-	// if err != nil {
-	// 	fmt.Errorf("opening config file : %v", err)
-	// }
-	// fmt.Printf("Unmarshalled : %v", dirsAPI)
-	// fmt.Printf("find json. SRC=%s\n", dirsAPI.Src)
-	// for i, direc := range dirsAPI.Directories {
-	// 	fmt.Printf("%d: Dir %s, %d files\n", i, direc.Path, direc.Count)
-	// 	for j, hist := range direc.History {
-	// 		fmt.Printf("History %d: %d\n", j, hist)
-	// 	}
-	// }
 	if *contexte.quick != "" {
 		dirs := Directories(contexte.dirfilesout)
 		// fmt.Printf("find json. SRC=%s\n", dirs.Src)

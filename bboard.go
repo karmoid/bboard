@@ -391,13 +391,26 @@ func fixedCount(ctx *context) {
 		fmt.Printf("File processed : %s\n", file.Name())
 		ctx.fileprocessed++
 	}
-
+	highlighted := false
 	for _, file := range ctx.dirfilesout.Directories {
 		highlight, trend := getTrend(ctx, file.Current.Count, file.Histories)
 		highlight = highlight || (*ctx.readonly && file.Current.Count > 0)
 
 		if highlight {
-			color.Set(color.FgHiWhite)
+			highlighted = true
+			if file.Current.Count == 0 {
+				color.Set(color.FgHiGreen)
+			} else if len(file.Histories) > 0 {
+				if file.Histories[len(file.Histories)-1].Count == 0 {
+					color.Set(color.FgHiYellow)
+				} else if file.Histories[len(file.Histories)-1].Count < file.Current.Count {
+					color.Set(color.FgHiMagenta)
+				} else {
+					color.Set(color.FgHiWhite)
+				}
+			} else {
+				color.Set(color.FgHiWhite)
+			}
 		}
 		if !*ctx.filter0 || highlight {
 			fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, trend)
@@ -414,6 +427,18 @@ func fixedCount(ctx *context) {
 	}
 	ctx.endtime = time.Now()
 	if *ctx.verbose {
+		if highlighted {
+			fmt.Println("Legend:")
+			color.Set(color.FgHiGreen)
+			fmt.Println("Got 0 file")
+			color.Set(color.FgHiYellow)
+			fmt.Println("Got new file(s) but was empty")
+			color.Set(color.FgHiMagenta)
+			fmt.Println("Increase pending file(s)")
+			color.Set(color.FgHiWhite)
+			fmt.Println("No new file but pending exist")
+			color.Unset()
+		}
 		elapsedtime := ctx.endtime.Sub(ctx.starttime)
 		seconds := int64(elapsedtime.Seconds())
 		if seconds == 0 {

@@ -78,6 +78,7 @@ type (
 	}
 
 	Directory struct {
+		Base      string
 		Path      string
 		Current   Stat
 		Histories []Stat
@@ -96,8 +97,10 @@ type (
 		exclude       *string
 		details       *string
 		errors        *string
+		influxdb      *string
 		flagNoColor   *bool
-		readonly      *bool
+		replay        *bool
+		selectfile    *string
 		feedback      *int
 		history       *int
 		filecount     uint64
@@ -259,7 +262,7 @@ func getFilesInPath(ctx *context, base string, lookingfor string) error {
 			}
 			if couldprocess {
 				curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
-				ctx.dirfilesout.Directories[path] = Directory{Path: path, Histories: make([]Stat, 0, 10), Current: curr}
+				ctx.dirfilesout.Directories[path] = Directory{Base: base, Path: path, Histories: make([]Stat, 0, 10), Current: curr}
 			} else {
 				// if p_debug {
 				// 	fmt.Printf("--- Directory Excluded: %s, %s, %v\n", path, info.Name(), info.IsDir())
@@ -311,10 +314,12 @@ func setFlagList(ctx *context) {
 	ctx.exclude = flag.String("exclude", "", "Directories to exclude")
 	ctx.details = flag.String("details", "", "File to store detail data - xls format, tab separator")
 	ctx.errors = flag.String("errors", "", "File to store errors list - txt format")
-	ctx.readonly = flag.Bool("readonly", false, "don't get files. Dump json file")
+	ctx.replay = flag.Bool("replay", false, "don't get files. Replay from json file")
+	ctx.selectfile = flag.String("select", "", "File/Dir select (contains)")
 	ctx.feedback = flag.Int("feedback", 0, "Display file processing (feedback count)")
 	ctx.history = flag.Int("history", max_history, "Keep historical data maximum")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
+	ctx.influxdb = flag.String("influxdb", "", "Standard output for InfluxDB. Specify tablename.")
 	flag.Parse()
 }
 
@@ -338,6 +343,11 @@ func processArgs(ctx *context) (err error) {
 		color.NoColor = true // disables colorized output
 	}
 
+	if *ctx.influxdb != "" {
+		*ctx.verbose = false
+	} else {
+		fmt.Printf("bboard - Files analysis - C.m. 2018 - V%s\n", VersionNum)
+	}
 	return nil
 }
 
@@ -369,16 +379,18 @@ func fixedCount(ctx *context) {
 		fmt.Printf("**START** (%v)\n", ctx.starttime)
 	}
 	for _, file := range ctx.allfilesout {
-		fmt.Printf("File processed : %s\n", file.Name())
-		ctx.fileprocessed++
+		if *ctx.selectfile == "" || strings.Contains(strings.ToLower(file.Name()), strings.ToLower(*ctx.selectfile)) {
+			fmt.Printf("File processed : %s\n", file.Name())
+			ctx.fileprocessed++
+		}
 		// ctx.filecount++
 	}
 	highlighted := false
-	for _, file := range ctx.dirfilesout.Directories {
+	for path, file := range ctx.dirfilesout.Directories {
 		highlight, trend := getTrend(ctx, file.Current.Count, file.Histories)
-		highlight = highlight || (*ctx.readonly && file.Current.Count > 0)
+		highlight = highlight || (*ctx.replay && file.Current.Count > 0)
 		ctx.fileprocessed = ctx.fileprocessed + uint64(file.Current.Count)
-
+		paths := strings.Split(strings.ToLower(path), "\\")
 		if highlight {
 			highlighted = true
 			if file.Current.Count == 0 {
@@ -397,11 +409,30 @@ func fixedCount(ctx *context) {
 		}
 		// ctx.filecount = ctx.filecount + uint64(file.Current.Count)
 		if !*ctx.filter0 || highlight {
-			fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, trend)
-			if *ctx.details != "" && *ctx.readonly {
-				if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%d\t%s\n", file.Path, file.Current.Count, trend)); err != nil {
-					fmt.Println(err)
-					os.Exit(1)
+			if *ctx.selectfile == "" || strings.Contains(strings.ToLower(file.Path), strings.ToLower(*ctx.selectfile)) {
+				if *ctx.influxdb != "" {
+					if _, err := io.WriteString(os.Stdout, fmt.Sprintf("%s,path=%s,set=%s value=%di,bigger=%di,smaller=%di,older=%di,younger=%di\n",
+						*ctx.influxdb,
+						strings.Replace(file.Path[len(file.Base):], " ", "_", -1),
+						paths[len(paths)-1],
+						file.Current.Count,
+						file.Current.MoreBytes,
+						file.Current.LessBytes,
+						file.Current.MoreSecs,
+						file.Current.LessSecs,
+					)); err != nil {
+						fmt.Println(err)
+						os.Exit(1)
+					}
+				} else {
+					fmt.Printf("Directory processed : %s - %d files%s\n", file.Path, file.Current.Count, trend)
+				}
+
+				if *ctx.details != "" && *ctx.replay {
+					if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%d\t%s\n", file.Path, file.Current.Count, trend)); err != nil {
+						fmt.Println(err)
+						os.Exit(1)
+					}
 				}
 			}
 		}
@@ -410,7 +441,9 @@ func fixedCount(ctx *context) {
 		}
 		if *ctx.verbose {
 			if !*ctx.filter0 || highlight {
-				file.Current.dumpDetails()
+				if *ctx.selectfile == "" || strings.Contains(strings.ToLower(file.Path), strings.ToLower(*ctx.selectfile)) {
+					file.Current.dumpDetails()
+				}
 			}
 		}
 		// ctx.fileprocessed++
@@ -454,7 +487,7 @@ func listCount(ctx *context) bool {
 	}
 	// var filecount uint64 = 0
 	// var dircount uint64 = 0
-	if *ctx.readonly {
+	if *ctx.replay {
 		if *ctx.verbose {
 			ctx.dircount = uint64(len(ctx.dirfilesout.Directories))
 			for _, item := range ctx.dirfilesout.Directories {
@@ -600,7 +633,7 @@ func getConfig(ctx *context) bool {
 		fmt.Println("error:", err)
 		return false
 	}
-	if Dir.Src != *ctx.src {
+	if strings.ToLower(Dir.Src) != strings.ToLower(*ctx.src) {
 		fmt.Println("***Start from empty file. Different Src args***")
 		return false
 	}
@@ -617,12 +650,12 @@ func getConfig(ctx *context) bool {
 // 1.2 : Optimization on first discovery. Walk already work on files. So use Walk file entry
 // 1.3 : Feedback on directory count
 // 1.4 : Dump fichiers dans CSV (Tab)
-// 1.5 : Dump fichiers dans CSV (Tab) pour le mode ReadOnly & Couleur+Legende
+// 1.5 : Dump fichiers dans CSV (Tab) pour le mode replay & Couleur+Legende
 // 1.6 : Ajout des erreurs dans un fichier dump. Erreur non fatal dans Walk
-const VersionNum = "1.6"
+// 1.7 : Option influxdb pour sortir sur le Standard Output les données InfluxDB
+const VersionNum = "1.7"
 
 func main() {
-	fmt.Printf("bboard - Files analysis - C.m. 2018 - V%s\n", VersionNum)
 	if err := processArgs(&contexte); err != nil {
 		fmt.Println(err)
 		os.Exit(2)
@@ -636,7 +669,7 @@ func main() {
 		}
 		defer contexte.detailsout.Close()
 
-		if *contexte.readonly {
+		if *contexte.replay {
 			if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\n", "path", "filecount", "trend")); err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -665,13 +698,17 @@ func main() {
 	}
 	if contexte.processlist {
 		if !listCount(&contexte) {
-			fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			if *contexte.verbose {
+				fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			}
 			// os.Exit(1)
 		}
 
 	} else {
 		if !genericCount(&contexte) {
-			fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			if *contexte.verbose {
+				fmt.Println("\nWITH PROCESS ERROR\n") // handle error
+			}
 			// os.Exit(1)
 		}
 	}

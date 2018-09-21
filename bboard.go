@@ -157,38 +157,21 @@ func (s Stat) registerFile(file os.FileInfo) Stat {
 	if !file.IsDir() {
 		s.Count++
 		delay := time.Since(file.ModTime())
-		// elapsedtime := humanizeMinutes(int(delay.Minutes()))
-		// if p_debug {
-		// 	fmt.Printf("file %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
-		// 	fmt.Printf("current stat %s, %v->%v, %s->%s\n", file.Name(), s.LessSecs, s.MoreSecs, humanize.Bytes(uint64(s.LessBytes)), humanize.Bytes(uint64(s.MoreBytes)))
-		// }
 		if file.Size() > s.MoreBytes {
 			s.MoreBytes = file.Size()
 			s.MbFile = file.Name()
-			// if p_debug {
-			// 	fmt.Printf("Taking MoreBytes %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
-			// }
 		}
 		if file.Size() < s.LessBytes {
 			s.LessBytes = file.Size()
 			s.LbFile = file.Name()
-			// if p_debug {
-			// 	fmt.Printf("Taking LessBytes %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
-			// }
 		}
 		if delay > s.MoreSecs {
 			s.MoreSecs = delay
 			s.MsFile = file.Name()
-			// if p_debug {
-			// 	fmt.Printf("Taking MoreSecs %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
-			// }
 		}
 		if delay < s.LessSecs {
 			s.LessSecs = delay
 			s.LsFile = file.Name()
-			// if p_debug {
-			// 	fmt.Printf("Taking LessSecs %s, %v-(%s), %s\n", file.Name(), file.ModTime(), elapsedtime, humanize.Bytes(uint64(file.Size())))
-			// }
 		}
 	}
 	return s
@@ -287,17 +270,11 @@ func getFilesInPath(ctx *context, base string, lookingfor string) error {
 				dir := ctx.dirfilesout.Directories[rootpath]
 				dir.Current = dir.Current.registerFile(info)
 				ctx.dirfilesout.Directories[rootpath] = dir
-			} else {
-				// if p_debug {
-				// 	fmt.Printf("--- Excluded: %s, %s, %v\n", path, info.Name(), info.IsDir())
-				// }
 			}
 		}
 		return nil
 	})
 	fmt.Printf("Processed files(%d) & Directories(%d)\n", ctx.filecount, ctx.dircount)
-	// ctx.filecount = filecount
-	// ctx.dircount = dircount
 
 	if err != nil {
 		fmt.Printf("error walking the path %q: %v\n", base, err)
@@ -325,20 +302,13 @@ func setFlagList(ctx *context) {
 
 // Check args and return error if anything is wrong
 func processArgs(ctx *context) (err error) {
-
-	required := []string{"src"}
-	setFlagList(&contexte)
-
-	seen := make(map[string]bool)
-	flag.Visit(func(f *flag.Flag) { seen[f.Name] = true })
-	for _, req := range required {
-		if !seen[req] {
-			// or possibly use `log.Fatalf` instead of:
-			return fmt.Errorf("missing required -%s argument/flag", req)
+	setFlagList(ctx)
+	if *ctx.src == "" {
+		if !*ctx.replay {
+			return fmt.Errorf("missing required -src argument/flag")
 		}
 	}
-	ctx.allfilesout = make([]os.FileInfo, 0, 300)
-	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: map[string]Directory{}}
+
 	if *ctx.flagNoColor {
 		color.NoColor = true // disables colorized output
 	}
@@ -391,35 +361,47 @@ func fixedCount(ctx *context) {
 		highlight = highlight || (*ctx.replay && file.Current.Count > 0)
 		ctx.fileprocessed = ctx.fileprocessed + uint64(file.Current.Count)
 		paths := strings.Split(strings.ToLower(path), "\\")
+		class := "common"
+		delta := 0
+		if len(file.Histories) > 0 {
+			delta = file.Current.Count - file.Histories[len(file.Histories)-1].Count
+		}
 		if highlight {
 			highlighted = true
 			if file.Current.Count == 0 {
 				color.Set(color.FgHiGreen)
+				class = "empty"
 			} else if len(file.Histories) > 0 {
 				if file.Histories[len(file.Histories)-1].Count == 0 {
 					color.Set(color.FgHiYellow)
+					class = "recent"
 				} else if file.Histories[len(file.Histories)-1].Count < file.Current.Count {
 					color.Set(color.FgHiMagenta)
+					class = "increase"
 				} else {
 					color.Set(color.FgHiWhite)
+					class = "flat"
 				}
 			} else {
 				color.Set(color.FgHiWhite)
+				class = "flat"
 			}
 		}
 		// ctx.filecount = ctx.filecount + uint64(file.Current.Count)
 		if !*ctx.filter0 || highlight {
 			if *ctx.selectfile == "" || strings.Contains(strings.ToLower(file.Path), strings.ToLower(*ctx.selectfile)) {
 				if *ctx.influxdb != "" {
-					if _, err := io.WriteString(os.Stdout, fmt.Sprintf("%s,path=%s,set=%s value=%di,bigger=%di,smaller=%di,older=%di,younger=%di\n",
+					if _, err := io.WriteString(os.Stdout, fmt.Sprintf("%s,path=%s,set=%s,class=%s value=%di,delta=%di,bigger=%di,smaller=%di,older=%di,younger=%di\n",
 						*ctx.influxdb,
 						strings.Replace(file.Path[len(file.Base):], " ", "_", -1),
 						paths[len(paths)-1],
+						class,
 						file.Current.Count,
+						delta,
 						file.Current.MoreBytes,
 						file.Current.LessBytes,
-						file.Current.MoreSecs,
-						file.Current.LessSecs,
+						int(file.Current.MoreSecs.Seconds()),
+						int(file.Current.LessSecs.Seconds()),
 					)); err != nil {
 						fmt.Println(err)
 						os.Exit(1)
@@ -485,8 +467,6 @@ func listCount(ctx *context) bool {
 	if *ctx.verbose {
 		fmt.Printf("Quick Process - %d Directories\n", len(ctx.dirfilesout.Directories))
 	}
-	// var filecount uint64 = 0
-	// var dircount uint64 = 0
 	if *ctx.replay {
 		if *ctx.verbose {
 			ctx.dircount = uint64(len(ctx.dirfilesout.Directories))
@@ -504,25 +484,12 @@ func listCount(ctx *context) bool {
 			files, err := ioutil.ReadDir(dir.Path)
 			haserror = err != nil
 			if len(ctx.dirfilesout.Directories[i].Histories) >= *ctx.history {
-				// fmt.Printf("Should manage fixed size (%d/%d)", len(ctx.dirfilesout.Directories[i].Histories), max_history)
-				// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
-				// 	fmt.Printf("before trunc slice %d: Count:%d\n", i, hist.Count)
-				// }
 				neededHistories := dir.Histories[1:]
-				// for i, hist := range neededHistories {
-				// 	fmt.Printf("after trunc slice %d: Count:%d\n", i, hist.Count)
-				// }
 				copiedHistories := make([]Stat, *ctx.history-1)
 				copy(copiedHistories, neededHistories)
-				// for i, hist := range copiedHistories {
-				// 	fmt.Printf("after copied slice %d: Count:%d\n", i, hist.Count)
-				// }
 				dir.Histories = copiedHistories
 			}
 			dir.Histories = append(dir.Histories, dir.Current)
-			// for i, hist := range ctx.dirfilesout.Directories[i].Histories {
-			// 	fmt.Printf("after append %d: Count:%d\n", i, hist.Count)
-			// }
 			curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
 			for _, file := range files {
 				if !file.IsDir() {
@@ -537,15 +504,12 @@ func listCount(ctx *context) bool {
 					if uint64(*ctx.feedback) > 0 && ctx.filecount%uint64(*ctx.feedback) == 0 {
 						fmt.Printf("f/d(%d/%d)\r", ctx.filecount, ctx.dircount)
 					}
-					// fmt.Printf("%d, %s\n", curr.Count, curr.LbFile)
 				}
 			}
 			dir.Current = curr
 			ctx.dirfilesout.Directories[i] = dir
 		}
 	}
-	// ctx.dircount = dircount
-	// ctx.filecount = filecount
 	fixedCount(ctx)
 	return haserror
 }
@@ -555,20 +519,13 @@ func genericCount(ctx *context) bool {
 	dir := map[string]string{}
 	specs := strings.Split(*ctx.src, ";")
 	for i := 0; i < len(specs); i++ {
-		// fmt.Printf("[%d/%d] %s\n", i+1, len(specs), specs[i])
 		if isWildcard(specs[i]) {
-			// fmt.Print("common process on Wildcard\n")
 			if err := getFiles(ctx, specs[i]); err != nil {
 				haserror = true
 				fmt.Errorf("Process error:", err)
 			}
 		} else if strings.HasSuffix(specs[i], "\\") {
 			paths := strings.Split(specs[i], "\\")
-			// if *ctx.verbose {
-			// 	for j := 0; j < len(paths); j++ {
-			// 		fmt.Printf("%d - path: %s\n", j, paths[j])
-			// 	}
-			// }
 			if len(paths) > 1 {
 				base := paths[0] + "\\"
 				startat := len(paths) - 1
@@ -584,17 +541,12 @@ func genericCount(ctx *context) bool {
 				} else {
 					dir[base] = lookfor
 				}
-				// if err := getFilesInPath(ctx, base, lookfor); err != nil {
-				// 	haserror = true
-				// 	fmt.Errorf("Process error: Not enough args [%s]", specs[i])
-				// }
 			} else {
 				haserror = true
 				fmt.Errorf("Process error")
 			}
 
 		} else {
-			// fmt.Print("faultback process on Wildcard\n")
 			if err := getFiles(ctx, specs[i]); err != nil {
 				haserror = true
 				fmt.Errorf("Process error:", err)
@@ -618,14 +570,9 @@ func genericCount(ctx *context) bool {
 func getConfig(ctx *context) bool {
 	file, err := os.Open(*ctx.quick)
 	if err != nil {
-		// fmt.Println("error:", err)
-		// configSt, _ := json.Marshal(&ctx.dirfilesout)
-		// fmt.Println("config:", configSt)
-		// ioutil.WriteFile(*ctx.quick, configSt, 0644)
 		return false
 	}
 	defer file.Close()
-	// fmt.Println("Nous allons décoder", file)
 	decoder := json.NewDecoder(file)
 	Dir := Directories{}
 	err = decoder.Decode(&Dir)
@@ -633,13 +580,19 @@ func getConfig(ctx *context) bool {
 		fmt.Println("error:", err)
 		return false
 	}
+	if *ctx.replay {
+		ctx.src = &Dir.Src
+	}
+
+	ctx.allfilesout = make([]os.FileInfo, 0, 300)
+	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: map[string]Directory{}}
+
 	if strings.ToLower(Dir.Src) != strings.ToLower(*ctx.src) {
 		fmt.Println("***Start from empty file. Different Src args***")
 		return false
 	}
 	for _, onedir := range Dir.Directories {
 		ctx.dirfilesout.Directories[onedir.Path] = onedir
-		// fmt.Printf("Just added %d: %s-%d\n", i, onedir.Path, onedir.Count)
 	}
 	return true
 }
@@ -701,7 +654,6 @@ func main() {
 			if *contexte.verbose {
 				fmt.Println("\nWITH PROCESS ERROR\n") // handle error
 			}
-			// os.Exit(1)
 		}
 
 	} else {
@@ -709,16 +661,12 @@ func main() {
 			if *contexte.verbose {
 				fmt.Println("\nWITH PROCESS ERROR\n") // handle error
 			}
-			// os.Exit(1)
 		}
 	}
 
-	if *contexte.quick != "" {
+	if *contexte.quick != "" && !*contexte.replay {
 		dirs := Directories(contexte.dirfilesout)
-		// fmt.Printf("find json. SRC=%s\n", dirs.Src)
 		dirsJson, _ := json.Marshal(dirs)
-		// fmt.Println("new json string: [", string(dirsJson), "]")
-		// fmt.Printf("%+v", dirs)
 		ioutil.WriteFile(*contexte.quick, dirsJson, 0644)
 	}
 

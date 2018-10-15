@@ -100,6 +100,7 @@ type (
 		influxdb      *string
 		flagNoColor   *bool
 		replay        *bool
+		flagtree      *bool
 		selectfile    *string
 		feedback      *int
 		history       *int
@@ -177,6 +178,24 @@ func (s Stat) registerFile(file os.FileInfo) Stat {
 	return s
 }
 
+func (s Stat) registerDir(file os.FileInfo) Stat {
+	if !file.IsDir() {
+		s.Count++
+		delay := time.Since(file.ModTime())
+		s.MoreBytes = s.MoreBytes + file.Size()
+		s.LessBytes = s.LessBytes + file.Size()
+		if delay > s.MoreSecs {
+			s.MoreSecs = delay
+			s.MsFile = file.Name()
+		}
+		if delay < s.LessSecs {
+			s.LessSecs = delay
+			s.LsFile = file.Name()
+		}
+	}
+	return s
+}
+
 // Check if path contains Wildcard characters
 func isWildcard(value string) bool {
 	return strings.Contains(value, "*") || strings.Contains(value, "?")
@@ -205,6 +224,32 @@ func getFiles(ctx *context, src string) error {
 		}
 	}
 	return nil
+}
+
+// Walk on Tree to calculate size and get oldest and youngest file
+func walkontree(ctx *context, base string) (stat Stat) {
+	stat = Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: int64(0), LessBytes: int64(0)}
+	err := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if *ctx.errors != "" {
+				if _, err := io.WriteString(ctx.errorsout, fmt.Sprintf("prevent panic by handling failure accessing a path %q: %s - %v\n", base, path, err)); err != nil {
+					fmt.Printf("unable to log error on %q: %s, %v\n", base, path, err)
+					os.Exit(1)
+				}
+				return err
+			}
+			fmt.Printf("Error %q: %s, %v\n", base, path, err)
+			return err
+		}
+		stat = stat.registerDir(info)
+		return nil
+	})
+
+	if err != nil {
+		fmt.Printf("error walking the path %q: %v\n", base, err)
+	}
+
+	return stat
 }
 
 // Get the files' list to copy
@@ -244,12 +289,31 @@ func getFilesInPath(ctx *context, base string, lookingfor string) error {
 				couldprocess = couldprocess || strings.ToLower(info.Name()) == strings.ToLower(look[i])
 			}
 			if couldprocess {
+				// fmt.Print("path", path, "base", base)
 				curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
 				ctx.dirfilesout.Directories[path] = Directory{Base: base, Path: path, Histories: make([]Stat, 0, 10), Current: curr}
-			} else {
-				// if p_debug {
-				// 	fmt.Printf("--- Directory Excluded: %s, %s, %v\n", path, info.Name(), info.IsDir())
-				// }
+			} else if *ctx.flagtree {
+				paths := strings.Split(path, "\\")
+				couldprocess = false
+				for j := 0; j < len(look); j++ {
+					couldprocess = couldprocess || strings.ToLower(paths[len(paths)-2]) == strings.ToLower(look[j])
+				}
+				if couldprocess {
+					// fmt.Printf("On pourrait traiter le répertoire %s\n", path)
+					ctx.dircount++
+					curr := walkontree(ctx, path)
+					// curr := Stat{Count: 0, MoreSecs: math.MinInt64, LessSecs: math.MaxInt64, MoreBytes: math.MinInt64, LessBytes: math.MaxInt64}
+					ctx.dirfilesout.Directories[path] = Directory{Base: base, Path: path, Histories: make([]Stat, 0, 10), Current: curr}
+					if *ctx.details != "" {
+						if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%s\t%d\t%d\t%s\t%d\t%s\t%d\t%s\n", base, path,
+							curr.Count, curr.LessBytes, humanize.Bytes(uint64(curr.LessBytes)),
+							int(curr.MoreSecs.Minutes()), humanizeMinutes(int(curr.MoreSecs.Minutes())),
+							int(curr.LessSecs.Minutes()), humanizeMinutes(int(curr.LessSecs.Minutes())))); err != nil {
+							fmt.Println(err)
+							os.Exit(1)
+						}
+					}
+				}
 			}
 		} else {
 			ctx.filecount++
@@ -259,7 +323,7 @@ func getFilesInPath(ctx *context, base string, lookingfor string) error {
 			for i := 0; i < len(look); i++ {
 				couldprocess = couldprocess || strings.ToLower(paths[len(paths)-2]) == strings.ToLower(look[i])
 			}
-			if couldprocess {
+			if !*ctx.flagtree && couldprocess {
 				rootpath := strings.Join(paths[0:len(paths)-1], "\\")
 				if *ctx.details != "" {
 					if _, err := io.WriteString(ctx.detailsout, fmt.Sprintf("%s\t%s\t%v\t%d\n", rootpath, info.Name(), info.ModTime(), info.Size())); err != nil {
@@ -296,6 +360,7 @@ func setFlagList(ctx *context) {
 	ctx.feedback = flag.Int("feedback", 0, "Display file processing (feedback count)")
 	ctx.history = flag.Int("history", max_history, "Keep historical data maximum")
 	ctx.flagNoColor = flag.Bool("no-color", false, "Disable color output")
+	ctx.flagtree = flag.Bool("tree", false, "Tree Size mode")
 	ctx.influxdb = flag.String("influxdb", "", "Standard output for InfluxDB. Specify tablename.")
 	flag.Parse()
 }
@@ -317,6 +382,10 @@ func processArgs(ctx *context) (err error) {
 		*ctx.verbose = false
 	} else {
 		fmt.Printf("bboard - Files analysis - C.m. 2018 - V%s\n", VersionNum)
+	}
+
+	if *ctx.flagtree {
+		// *ctx.quick = ""
 	}
 	return nil
 }
@@ -567,6 +636,11 @@ func genericCount(ctx *context) bool {
 	return haserror
 }
 
+func initDataArea(ctx *context) {
+	ctx.allfilesout = make([]os.FileInfo, 0, 300)
+	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: map[string]Directory{}}
+}
+
 func getConfig(ctx *context) bool {
 	file, err := os.Open(*ctx.quick)
 	if err != nil {
@@ -583,9 +657,6 @@ func getConfig(ctx *context) bool {
 	if *ctx.replay {
 		ctx.src = &Dir.Src
 	}
-
-	ctx.allfilesout = make([]os.FileInfo, 0, 300)
-	ctx.dirfilesout = Directories{Src: *ctx.src, Directories: map[string]Directory{}}
 
 	if strings.ToLower(Dir.Src) != strings.ToLower(*ctx.src) {
 		fmt.Println("***Start from empty file. Different Src args***")
@@ -606,7 +677,8 @@ func getConfig(ctx *context) bool {
 // 1.5 : Dump fichiers dans CSV (Tab) pour le mode replay & Couleur+Legende
 // 1.6 : Ajout des erreurs dans un fichier dump. Erreur non fatal dans Walk
 // 1.7 : Option influxdb pour sortir sur le Standard Output les données InfluxDB
-const VersionNum = "1.7"
+// 1.8 : Ajout de Treesize
+const VersionNum = "1.8"
 
 func main() {
 	if err := processArgs(&contexte); err != nil {
@@ -624,6 +696,11 @@ func main() {
 
 		if *contexte.replay {
 			if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\n", "path", "filecount", "trend")); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		} else if *contexte.flagtree {
+			if _, err := io.WriteString(contexte.detailsout, fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "base", "path", "filecount", "totalsize", "size", "youngest_min", "youngest", "oldest_min", "oldest")); err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
@@ -649,6 +726,8 @@ func main() {
 	if *contexte.quick != "" {
 		contexte.processlist = getConfig(&contexte)
 	}
+	initDataArea(&contexte)
+
 	if contexte.processlist {
 		if !listCount(&contexte) {
 			if *contexte.verbose {
